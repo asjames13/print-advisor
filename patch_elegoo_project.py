@@ -181,7 +181,7 @@ def main():
     parser = argparse.ArgumentParser(description="Patch an ElegooSlicer .3mf with a new STL + recommended settings")
     parser.add_argument('base_3mf', help="A .3mf you saved from ElegooSlicer with the correct printer/filament selected")
     parser.add_argument('stl_file', help="The new STL to slice")
-    parser.add_argument('--project', choices=['decor', 'functional', 'figure', 'test', 'lamp'], required=True)
+    parser.add_argument('--project', choices=['decor', 'functional', 'figure', 'test', 'structure'], required=True)
     parser.add_argument('--material', choices=list(MATERIALS.keys()), default='pla')
     parser.add_argument('--apply-material-temps', action='store_true',
                          help="Also override nozzle/bed temps from the material table "

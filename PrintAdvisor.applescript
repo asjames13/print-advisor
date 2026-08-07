@@ -28,7 +28,7 @@ on open theFiles
 end open
 
 on processFile(stlPath)
-	set projectChoice to choose from list {"functional", "decor", "figure", "test", "lamp"} with prompt "What is this part for?" default items {"functional"} without multiple selections allowed
+	set projectChoice to choose from list {"functional", "decor", "figure", "test", "structure"} with prompt "What is this part for?" default items {"functional"} without multiple selections allowed
 	if projectChoice is false then return
 	set projectType to item 1 of projectChoice
 

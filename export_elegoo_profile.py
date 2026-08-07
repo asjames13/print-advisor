@@ -130,14 +130,14 @@ def slicer_overrides(geo, project, material_key):
     elif project == 'test':
         process['layer_height'] = '0.2'
         process['initial_layer_print_height'] = '0.24'
-    elif project == 'lamp':
-        process['layer_height'] = '0.16'
+    elif project in ('structural', 'structure'):
+        process['layer_height'] = '0.2'
         process['initial_layer_print_height'] = '0.2'
     else:
         process['layer_height'] = '0.2'
         process['initial_layer_print_height'] = '0.2'
 
-    process['seam_position'] = 'back' if project in ('decor', 'functional', 'lamp') else 'random'
+    process['seam_position'] = 'back' if project in ('decor', 'functional', 'structural', 'structure') else 'random'
     process['ironing_type'] = 'top' if project == 'decor' else 'no ironing'
     if large_flat:
         process['elefant_foot_compensation'] = '0.175'
@@ -161,12 +161,12 @@ def slicer_overrides(geo, project, material_key):
         process['bottom_shell_layers'] = '4'
         process['sparse_infill_density'] = '18%'
         process['sparse_infill_pattern'] = 'gyroid'
-    elif project == 'lamp':
-        process['wall_loops'] = '2'
-        process['top_shell_layers'] = '0'
-        process['bottom_shell_layers'] = '0'
-        process['sparse_infill_density'] = '0%'
-        process['sparse_infill_pattern'] = 'grid'
+    elif project in ('structural', 'structure'):
+        process['wall_loops'] = '8'
+        process['top_shell_layers'] = '8'
+        process['bottom_shell_layers'] = '8'
+        process['sparse_infill_density'] = '100%'
+        process['sparse_infill_pattern'] = 'rectilinear'
     else:  # test
         process['wall_loops'] = '2'
         process['top_shell_layers'] = '3'
@@ -183,7 +183,8 @@ def slicer_overrides(geo, project, material_key):
         'functional': ('120-150mm/s', '180mm/s'),
         'figure': ('100-130mm/s', '180mm/s'),
         'decor': ('150-180mm/s', '220mm/s'),
-        'lamp': ('80-100mm/s', '80-100mm/s'),  # infill is 0%, value is unused but key must exist
+        'structural': ('110mm/s', '150mm/s'),
+        'structure': ('110mm/s', '150mm/s'),
     }
     outer, infill = speed_by_project[project]
     process['outer_wall_speed'] = str(round(_midpoint(outer)))
@@ -193,15 +194,15 @@ def slicer_overrides(geo, project, material_key):
     # Support
     if geo['overhang_pct'] > 5:
         process['enable_support'] = '1'
-        process['support_type'] = 'tree(auto)' if project == 'figure' else 'normal(auto)'
+        process['support_type'] = 'tree(auto)' if project in ('figure', 'structural', 'structure') else 'normal(auto)'
         process['support_threshold_angle'] = '45'
     else:
         process['enable_support'] = '0'
 
     # Other
-    if large_flat:
+    if large_flat or project in ('structural', 'structure'):
         process['brim_type'] = 'outer_only'
-        process['brim_width'] = '6.5'
+        process['brim_width'] = '5' if project in ('structural', 'structure') and not large_flat else '6.5'
         process['brim_object_gap'] = '0.125'
     process['fuzzy_skin'] = 'none'
 

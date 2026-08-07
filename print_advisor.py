@@ -257,13 +257,22 @@ def recommend_orientation(geo, project):
             "PEI-texture marking on the surface people will actually see."
         )
 
-    elif project == 'lamp':
-        orientation = f"Place the {geo['best_face']} opening/base face down for the most even wall thickness top to bottom."
+    elif project == 'structure':
         reasons.append(
-            "Light-diffusing shells print most evenly with the part standing upright on its "
-            "widest stable opening — printing on its side introduces visible banding where "
-            "layer lines catch the light differently."
+            "STRUCTURAL/LOAD-BEARING: orient so the main force direction runs ACROSS "
+            "layer lines, not along them. A bracket or high-stress component under tension "
+            "or bending should have layers stacked perpendicular to the pull to prevent layer splitting."
         )
+        reasons.append(
+            "If there are bearing/pin holes or internal bores, print them VERTICALLY "
+            "where possible so holes print round without horizontal step-deformation."
+        )
+        if best_face_strong:
+            reasons.append(
+                f"Geometry suggests the {geo['best_face']} face is your most stable base — "
+                "good candidate for bed contact, unless load direction dictates otherwise."
+            )
+        orientation = "Prioritize force-vector orientation over flatness."
 
     else:  # test
         orientation = f"Quick/practical — place the {geo['best_face']} face down if it's reasonably flat, otherwise whatever orients fastest."
@@ -341,19 +350,19 @@ def recommend(geo, project, material_key):
     elif project == 'test':
         settings['quality']['Layer height'] = '0.2mm'
         settings['quality']['First layer height'] = '0.24mm'
-    elif project == 'lamp':
-        settings['quality']['Layer height'] = '0.16mm'
+    elif project in ('structural', 'structure'):
+        settings['quality']['Layer height'] = '0.2mm'
         settings['quality']['First layer height'] = '0.2mm'
         settings['notes'].append(
-            "Thinner layer height (0.16mm) gives smoother, more even light diffusion "
-            "through the walls than the usual 0.2mm default."
+            "Standard 0.2mm layer height combined with heavy shell walls and 100% infill "
+            "maximizes interlayer bonding strength and load-bearing performance."
         )
     else:
         settings['quality']['Layer height'] = '0.2mm'
         settings['quality']['First layer height'] = '0.2mm'
 
     settings['quality']['Seam position'] = (
-        'Aligned (rear/hidden edge)' if project in ('decor', 'functional', 'lamp')
+        'Aligned (rear/hidden edge)' if project in ('decor', 'functional', 'structural', 'structure')
         else 'Random (breaks up seam on organic surface)'
     )
     if project == 'decor':
@@ -386,16 +395,14 @@ def recommend(geo, project, material_key):
         settings['strength']['Top/bottom shell layers'] = 4
         settings['strength']['Sparse infill density'] = '15-20%'
         settings['strength']['Sparse infill pattern'] = 'Gyroid'
-    elif project == 'lamp':
-        settings['strength']['Wall loops'] = 2
-        settings['strength']['Top/bottom shell layers'] = 0
-        settings['strength']['Sparse infill density'] = '0%'
-        settings['strength']['Sparse infill pattern'] = 'N/A (hollow shell)'
+    elif project in ('structural', 'structure'):
+        settings['strength']['Wall loops'] = 8
+        settings['strength']['Top/bottom shell layers'] = 8
+        settings['strength']['Sparse infill density'] = '100%'
+        settings['strength']['Sparse infill pattern'] = 'Rectilinear'
         settings['notes'].append(
-            "No infill and no top/bottom shell — a lamp shade is meant to stay hollow so "
-            "light passes through the thin walls evenly. If the design needs a solid base "
-            "for a bulb socket, add a modifier/cut in-slicer for just that section rather "
-            "than infilling the whole part."
+            "Maximized wall loops (8), shell layers (8), and 100% solid infill "
+            "to achieve maximum torsional and mechanical load strength."
         )
     else:  # test
         settings['strength']['Wall loops'] = 2
@@ -419,12 +426,12 @@ def recommend(geo, project, material_key):
         settings['speed']['Outer wall'] = '100-130mm/s'
         settings['speed']['Sparse infill'] = '180mm/s'
         settings['notes'].append("Detail part — moderate speed to keep small features clean.")
-    elif project == 'lamp':
-        settings['speed']['Outer wall'] = '80-100mm/s'
-        settings['speed']['Sparse infill'] = 'N/A (no infill)'
+    elif project in ('structural', 'structure'):
+        settings['speed']['Outer wall'] = '110mm/s'
+        settings['speed']['Sparse infill'] = '150mm/s'
         settings['notes'].append(
-            "Slower outer wall speed for lamp shells — consistent extrusion at lower speed "
-            "means more even wall thickness, which shows up directly as even light diffusion."
+            "Structural part — print speeds are slowed down to maximize layer "
+            "adhesion, thermal fusion, and uniform solid infill extrusion."
         )
     else:  # decor
         settings['speed']['Outer wall'] = '150-180mm/s'
@@ -435,10 +442,9 @@ def recommend(geo, project, material_key):
     else:
         settings['speed']['First layer speed'] = '50mm/s (default fine)'
 
-    # --- Support tab ---
     if geo['overhang_pct'] > 5:
         settings['support']['Enable support'] = True
-        settings['support']['Type'] = 'Tree (auto)' if project == 'figure' else 'Normal'
+        settings['support']['Type'] = 'Tree (auto)' if project in ('figure', 'structural', 'structure') else 'Normal'
         settings['support']['Threshold angle'] = '45°'
         settings['notes'].append(
             f"Geometry shows ~{geo['overhang_pct']:.0f}% steep overhang in current orientation — "
@@ -449,13 +455,13 @@ def recommend(geo, project, material_key):
         settings['notes'].append("Low overhang detected — supports likely unnecessary.")
 
     # --- Other tab ---
-    if large_flat:
+    if large_flat or project in ('structural', 'structure'):
         settings['other']['Brim type'] = 'Outer brim only'
         settings['other']['Brim width'] = '5-8mm'
         settings['other']['Brim-object gap'] = '0.1-0.15mm'
         settings['notes'].append(
-            f"Large flat part ({geo['max_xy']:.0f}mm footprint, {geo['height']:.0f}mm tall) — "
-            "brim strongly recommended to prevent corner warping."
+            f"High solid density / footprint ({geo['max_xy']:.0f}mm max XY) — "
+            "outer brim strongly recommended to prevent corner lifting from plastic cooling shrinkage."
         )
     else:
         settings['other']['Brim type'] = 'Auto (or No-brim if part is small/stable)'
@@ -521,7 +527,7 @@ def print_report(filename, geo, settings, mat, project):
 def main():
     parser = argparse.ArgumentParser(description="Elegoo Slicer settings advisor")
     parser.add_argument('stl_file', help="Path to the STL file")
-    parser.add_argument('--project', choices=['decor', 'functional', 'figure', 'test', 'lamp'],
+    parser.add_argument('--project', choices=['decor', 'functional', 'figure', 'test', 'structure'],
                          required=True, help="Project type")
     parser.add_argument('--material', choices=list(MATERIALS.keys()),
                          default='pla', help="Filament material (default: pla)")
