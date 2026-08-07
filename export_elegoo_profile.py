@@ -1,166 +1,321 @@
 #!/usr/bin/env python3
 """
-Export Elegoo / OrcaSlicer Process Profile JSON & Slicer Overrides
--------------------------------------------------------------------
-Generates custom process profile JSON files and exports raw slicer key overrides
-for Elegoo Slicer / OrcaSlicer based on project type and STL geometry.
+Export Print Advisor recommendations as real ElegooSlicer/OrcaSlicer user
+presets (process + filament), so the settings don't have to be typed in by
+hand every time.
 
 USAGE:
-    python3 export_elegoo_profile.py --profile structural --output ./profiles/
+    python3 export_elegoo_profile.py <file.stl> --project TYPE --material MATERIAL
+
+Produces a "<profile name>.json" + "<profile name>.info" pair for both the
+process (Quality/Strength/Speed/Support/Other) and filament (temps) presets
+in ./elegoo_profiles/, plus install instructions.
+
+These are real ElegooSlicer user presets, not a generic "3D settings file" -
+the format was reverse engineered from ElegooSlicer's own source tree
+(system profiles) and cross-checked against a known-working, real-world
+custom profile set for the same printer (StudioAurora/elegoo-slicer-profiles
+on GitHub) to confirm the on-disk format ElegooSlicer actually accepts for
+user-created presets, which differs from the system-preset format and is
+undocumented by Elegoo/Orca.
+
+LIMITATION: only Centauri Carbon (--printer cc) has verified filament base
+names below. Centauri Carbon 2 (--printer cc2) has a verified process base
+but unverified filament base names - the filament profile step is skipped
+for cc2 with a warning.
 """
 
-import os
-import json
 import argparse
-from typing import Dict, Any
+import json
+import re
+import time
+from pathlib import Path
 
-PROFILE_PRESET_MAP = {
-    "functional": "0.20mm Standard @Elegoo CC2",
-    "decor": "0.16mm Fine @Elegoo CC2",
-    "test": "0.28mm Draft @Elegoo CC2",
-    "figure": "0.12mm High Detail @Elegoo CC2",
-    "structural": "0.16mm Heavy Structural @Elegoo CC2",
+from print_advisor import analyze_stl, recommend, MATERIALS, BUILD_VOLUME  # noqa: F401
+
+
+def detect_slicer_version(default="1.5.2.2"):
+    """
+    ElegooSlicer silently ignores a user preset whose declared "version"
+    field doesn't match the running app's version - it doesn't error, the
+    preset just never shows up in the dropdown. Read the real version out of
+    ElegooSlicer's own config rather than hardcoding one that will go stale
+    on the next app update.
+    """
+    conf_path = Path.home() / "Library/Application Support/ElegooSlicer/ElegooSlicer.conf"
+    try:
+        conf = json.loads(conf_path.read_text())
+        version = conf.get("app", {}).get("version") or conf.get("version")
+        if isinstance(version, str) and version:
+            return version
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    return default
+
+
+SLICER_VERSION = detect_slicer_version()
+
+
+# ---------------------------------------------------------------------------
+# Known-real ElegooSlicer system preset names (verified against the
+# ElegooSlicer/OrcaSlicer source tree - see script docstring).
+# ---------------------------------------------------------------------------
+
+PRINTER_BASES = {
+    'cc': {
+        'process_base': '0.20mm Standard @Elegoo CC 0.4 nozzle',
+        'process_base_id': 'PECC04020',  # confirmed real value for this exact base
+        'label': 'Centauri Carbon',
+    },
+    'cc2': {
+        # NOTE: "@Elegoo C2" (folder EC2) is the plain Centauri 2, a different
+        # printer. Centauri Carbon 2's real base lives in the ECC2 folder.
+        'process_base': '0.20mm Standard @Elegoo CC2 0.4 nozzle',
+        'process_base_id': '',  # not verified - left blank rather than guessed
+        'label': 'Centauri Carbon 2',
+    },
 }
 
-PROFILE_SETTINGS: Dict[str, Dict[str, Any]] = {
-    "test": {
-        "layer_height": "0.28",
-        "initial_layer_print_height": "0.24",
-        "wall_loops": "2",
-        "sparse_infill_density": "15%",
-        "sparse_infill_pattern": "grid",
-        "top_shell_layers": "3",
-        "bottom_shell_layers": "3",
+# material key -> real Elegoo system filament preset name, verified to exist
+# and be compatible with the given printer's 0.4mm nozzle.
+FILAMENT_BASES = {
+    'cc': {
+        'pla': 'Elegoo PLA Basic @ECC',
+        'pla_plus': 'Elegoo PLA+ @ECC',
+        'petg': 'Elegoo PETG @ECC',
+        'petg_cf': 'Elegoo PETG-CF @ECC',
+        'tpu': 'Elegoo TPU 95A @ECC',
+        'paht_cf': 'Elegoo PAHT-CF @ECC',
+        'pa6_cf': 'Generic PA6-CF @Elegoo',
+        # ppa_cf, pa12_cf, pps_cf: no matching Elegoo/Generic base ships in
+        # ElegooSlicer as of this writing - skipped, noted in output.
     },
-    "decor": {
-        "layer_height": "0.16",
-        "initial_layer_print_height": "0.20",
-        "wall_loops": "2",
-        "sparse_infill_density": "10%",
-        "sparse_infill_pattern": "gyroid",
-        "top_shell_layers": "4",
-        "bottom_shell_layers": "4",
+    'cc2': {
+        'pla': 'Elegoo PLA Basic @ECC2',
+        'pla_plus': 'Elegoo PLA+ @ECC2',
+        'petg': 'Elegoo PETG @ECC2',
+        'petg_cf': 'Elegoo PETG-CF @ECC2',
+        'tpu': 'Elegoo TPU 95A @ECC2',
+        'paht_cf': 'Elegoo PAHT-CF @ECC2',
+        'pa6_cf': 'Generic PA6-CF @Elegoo',
+        # ppa_cf, pa12_cf, pps_cf: same gap as cc.
     },
-    "figure": {
-        "layer_height": "0.12",
-        "initial_layer_print_height": "0.20",
-        "wall_loops": "3",
-        "sparse_infill_density": "15%",
-        "sparse_infill_pattern": "gyroid",
-        "top_shell_layers": "5",
-        "bottom_shell_layers": "5",
-    },
-    "functional": {
-        "layer_height": "0.20",
-        "initial_layer_print_height": "0.20",
-        "wall_loops": "4",
-        "sparse_infill_density": "40%",
-        "sparse_infill_pattern": "gyroid",
-        "top_shell_layers": "5",
-        "bottom_shell_layers": "5",
-    },
-    "structural": {
-        "layer_height": "0.16",
-        "initial_layer_print_height": "0.20",
-        "wall_loops": "8",
-        "sparse_infill_density": "100%",
-        "sparse_infill_pattern": "rectilinear",
-        "top_shell_layers": "8",
-        "bottom_shell_layers": "8",
-        "fan_max_speed": "40",
-        "enable_support": "1",
-        "support_type": "tree_auto",
-    }
 }
 
 
-def slicer_overrides(geo: dict, project: str, material: str) -> Dict[str, str]:
-    """
-    Generate dictionary of raw OrcaSlicer/ElegooSlicer process overrides
-    for project_settings.config patching in .3mf project files.
-    """
-    settings = PROFILE_SETTINGS.get(project, PROFILE_SETTINGS["functional"])
-    overrides = {k: str(v) for k, v in settings.items()}
+def _midpoint(text):
+    """Pull the numeric value (or the average of a 'X-Y' range) out of a
+    display string like '150-180mm/s' or '45°' or '5-8mm'."""
+    nums = [float(x) for x in re.findall(r'[\d.]+', text)]
+    if not nums:
+        return None
+    return sum(nums) / len(nums)
 
-    if project == "structural":
-        overrides["outer_wall_speed"] = "110"
-        overrides["sparse_infill_speed"] = "150"
-    elif project == "functional":
-        overrides["outer_wall_speed"] = "135"
-        overrides["sparse_infill_speed"] = "180"
+
+def slicer_overrides(geo, project, material_key):
+    """
+    Mirrors the decision logic in print_advisor.recommend(), but returns raw
+    ElegooSlicer/OrcaSlicer config keys and values instead of display text -
+    kept as a parallel function (rather than parsing recommend()'s formatted
+    strings) so the mapping to real slicer keys stays exact instead of
+    depending on regex-parsing human-readable ranges like "40-60%".
+    """
+    large_flat = geo['max_xy'] > 150 and geo['height'] < 20
+    process = {}
+
+    # Quality
+    if project == 'figure':
+        process['layer_height'] = '0.16'
+        process['initial_layer_print_height'] = '0.2'
+    elif project == 'test':
+        process['layer_height'] = '0.2'
+        process['initial_layer_print_height'] = '0.24'
+    elif project == 'lamp':
+        process['layer_height'] = '0.16'
+        process['initial_layer_print_height'] = '0.2'
     else:
-        overrides["outer_wall_speed"] = "165"
-        overrides["sparse_infill_speed"] = "220"
+        process['layer_height'] = '0.2'
+        process['initial_layer_print_height'] = '0.2'
 
-    if geo.get("overhang_pct", 0) > 5 or project == "structural":
-        overrides["enable_support"] = "1"
-        overrides["support_type"] = settings.get("support_type", "tree_auto")
+    process['seam_position'] = 'back' if project in ('decor', 'functional', 'lamp') else 'random'
+    process['ironing_type'] = 'top' if project == 'decor' else 'no ironing'
+    if large_flat:
+        process['elefant_foot_compensation'] = '0.175'
 
-    return overrides
+    # Strength
+    if project == 'functional':
+        process['wall_loops'] = '4'
+        process['top_shell_layers'] = '5'
+        process['bottom_shell_layers'] = '5'
+        process['sparse_infill_density'] = '50%'
+        process['sparse_infill_pattern'] = 'gyroid'
+    elif project == 'figure':
+        process['wall_loops'] = '2'
+        process['top_shell_layers'] = '3'
+        process['bottom_shell_layers'] = '3'
+        process['sparse_infill_density'] = '18%'
+        process['sparse_infill_pattern'] = 'gyroid'
+    elif project == 'decor':
+        process['wall_loops'] = '3'
+        process['top_shell_layers'] = '4'
+        process['bottom_shell_layers'] = '4'
+        process['sparse_infill_density'] = '18%'
+        process['sparse_infill_pattern'] = 'gyroid'
+    elif project == 'lamp':
+        process['wall_loops'] = '2'
+        process['top_shell_layers'] = '0'
+        process['bottom_shell_layers'] = '0'
+        process['sparse_infill_density'] = '0%'
+        process['sparse_infill_pattern'] = 'grid'
+    else:  # test
+        process['wall_loops'] = '2'
+        process['top_shell_layers'] = '3'
+        process['bottom_shell_layers'] = '3'
+        process['sparse_infill_density'] = '12%'
+        process['sparse_infill_pattern'] = 'grid'
+
+    if MATERIALS[material_key].get('flexible'):
+        process['wall_loops'] = str(max(int(process['wall_loops']), 3))
+
+    # Speed
+    speed_by_project = {
+        'test': ('180-200mm/s', '250mm/s'),
+        'functional': ('120-150mm/s', '180mm/s'),
+        'figure': ('100-130mm/s', '180mm/s'),
+        'decor': ('150-180mm/s', '220mm/s'),
+        'lamp': ('80-100mm/s', '80-100mm/s'),  # infill is 0%, value is unused but key must exist
+    }
+    outer, infill = speed_by_project[project]
+    process['outer_wall_speed'] = str(round(_midpoint(outer)))
+    process['sparse_infill_speed'] = str(round(_midpoint(infill)))
+    process['initial_layer_speed'] = '35' if large_flat else '50'
+
+    # Support
+    if geo['overhang_pct'] > 5:
+        process['enable_support'] = '1'
+        process['support_type'] = 'tree(auto)' if project == 'figure' else 'normal(auto)'
+        process['support_threshold_angle'] = '45'
+    else:
+        process['enable_support'] = '0'
+
+    # Other
+    if large_flat:
+        process['brim_type'] = 'outer_only'
+        process['brim_width'] = '6.5'
+        process['brim_object_gap'] = '0.125'
+    process['fuzzy_skin'] = 'none'
+
+    return process
 
 
-def build_elegoo_profile_dict(profile_name: str) -> Dict[str, Any]:
-    preset_name = PROFILE_PRESET_MAP.get(profile_name, PROFILE_PRESET_MAP["functional"])
-    settings = PROFILE_SETTINGS.get(profile_name, PROFILE_SETTINGS["functional"])
-
-    base_json = {
-        "type": "process",
-        "name": preset_name,
-        "from": "system",
-        "instantiation": "true",
-        "inherits": "0.16mm Optimal @Elegoo CC2",
-        "version": "1.9.0.0",
-        "layer_height": settings.get("layer_height", "0.16"),
-        "initial_layer_print_height": settings.get("initial_layer_print_height", "0.20"),
-        "wall_loops": settings.get("wall_loops", "4"),
-        "sparse_infill_density": settings.get("sparse_infill_density", "40%"),
-        "sparse_infill_pattern": settings.get("sparse_infill_pattern", "gyroid"),
-        "top_shell_layers": settings.get("top_shell_layers", "5"),
-        "bottom_shell_layers": settings.get("bottom_shell_layers", "5"),
+def build_process_profile(name, printer_base, overrides):
+    return {
+        "from": "User",
+        "inherits": printer_base['process_base'],
+        "is_custom_defined": "0",
+        "name": name,
+        "print_settings_id": name,
+        **overrides,
+        "version": SLICER_VERSION,
     }
 
-    if "fan_max_speed" in settings:
-        base_json["fan_max_speed"] = [settings["fan_max_speed"]]
-    if "enable_support" in settings:
-        base_json["enable_support"] = settings["enable_support"]
-    if "support_type" in settings:
-        base_json["support_type"] = settings["support_type"]
 
-    return base_json
+def build_filament_profile(name, filament_base, mat):
+    temp = str(mat['nozzle_temp'])
+    bed = str(mat['bed_temp'])
+    return {
+        "filament_settings_id": [name],
+        "from": "User",
+        "inherits": filament_base,
+        "is_custom_defined": "0",
+        "name": name,
+        "nozzle_temperature": [temp],
+        "nozzle_temperature_initial_layer": [temp],
+        "hot_plate_temp": [bed],
+        "hot_plate_temp_initial_layer": [bed],
+        "version": SLICER_VERSION,
+    }
 
 
-def export_profile(profile_name: str, output_dir: str) -> str:
-    os.makedirs(output_dir, exist_ok=True)
-    preset_name = PROFILE_PRESET_MAP.get(profile_name, PROFILE_PRESET_MAP["functional"])
-    safe_filename = preset_name.replace(" ", "_").replace("@", "at") + ".json"
-    target_path = os.path.join(output_dir, safe_filename)
-
-    profile_data = build_elegoo_profile_dict(profile_name)
-
-    with open(target_path, "w", encoding="utf-8") as f:
-        json.dump(profile_data, f, indent=4)
-
-    print(f"[+] Exported Elegoo Profile: '{preset_name}' -> {target_path}")
-    return target_path
+def build_info(base_id=""):
+    return (
+        "sync_info = create\n"
+        "user_id = \n"
+        "setting_id = \n"
+        f"base_id = {base_id}\n"
+        f"updated_time = {int(time.time())}\n"
+    )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Export Elegoo Slicer Process JSON")
-    parser.add_argument(
-        "--profile",
-        choices=list(PROFILE_PRESET_MAP.keys()),
-        default="structural",
-        help="Target profile choice"
-    )
-    parser.add_argument(
-        "--output",
-        default="./export_profiles",
-        help="Directory path to save exported JSON profile"
-    )
+    parser = argparse.ArgumentParser(description="Export Print Advisor settings as ElegooSlicer user presets")
+    parser.add_argument('stl_file', help="Path to the STL file")
+    parser.add_argument('--project', choices=['decor', 'functional', 'figure', 'test', 'lamp'], required=True)
+    parser.add_argument('--material', choices=list(MATERIALS.keys()), default='pla')
+    parser.add_argument('--printer', choices=['cc', 'cc2'], default='cc2',
+                         help="Centauri Carbon (cc) or Centauri Carbon 2 (cc2, default)")
+    parser.add_argument('--out', default='elegoo_profiles', help="Output directory")
     args = parser.parse_args()
 
-    export_profile(args.profile, args.output)
+    printer_base = PRINTER_BASES[args.printer]
+    geo = analyze_stl(args.stl_file)
+    mat = MATERIALS[args.material]
+    overrides = slicer_overrides(geo, args.project, args.material)
+
+    out_dir = Path(args.out)
+    process_dir = out_dir / 'process'
+    filament_dir = out_dir / 'filament'
+    process_dir.mkdir(parents=True, exist_ok=True)
+
+    process_name = f"{args.project.capitalize()} {mat['name'].split(' ')[0]} @Elegoo {printer_base['label']}"
+    process_profile = build_process_profile(process_name, printer_base, overrides)
+    (process_dir / f"{process_name}.json").write_text(json.dumps(process_profile, indent=4))
+    (process_dir / f"{process_name}.info").write_text(build_info(printer_base['process_base_id']))
+
+    print(f"Wrote process profile: {process_dir / (process_name + '.json')}")
+
+    filament_bases = FILAMENT_BASES[args.printer]
+    suffix = 'ECC2' if args.printer == 'cc2' else 'ECC'
+    filament_name = None
+    if args.material in filament_bases:
+        filament_dir.mkdir(parents=True, exist_ok=True)
+        filament_base = filament_bases[args.material]
+        filament_name = f"{mat['name']} (Print Advisor) @{suffix}"
+        filament_profile = build_filament_profile(filament_name, filament_base, mat)
+        (filament_dir / f"{filament_name}.json").write_text(json.dumps(filament_profile, indent=4))
+        (filament_dir / f"{filament_name}.info").write_text(build_info())
+        print(f"Wrote filament profile: {filament_dir / (filament_name + '.json')}")
+    else:
+        print(
+            f"NOTE: no verified ElegooSlicer system filament base for "
+            f"'{args.material}' on printer '{args.printer}' - skipping filament "
+            f"profile. Select the closest stock filament preset in ElegooSlicer "
+            f"and manually set nozzle={mat['nozzle_temp']}C / bed={mat['bed_temp']}C."
+        )
+
+    print()
+    print("=== INSTALL ===")
+    print("1. Quit ElegooSlicer if it's running.")
+    print("2. Copy the file(s) into your ElegooSlicer user preset folder:")
+    print()
+    print(f"   cp '{process_dir}'/*.json '{process_dir}'/*.info \\")
+    print("     ~/Library/Application\\ Support/ElegooSlicer/user/default/process/")
+    if filament_name:
+        print()
+        print(f"   cp '{filament_dir}'/*.json '{filament_dir}'/*.info \\")
+        print("     ~/Library/Application\\ Support/ElegooSlicer/user/default/filament/")
+    print()
+    print(f"3. Relaunch ElegooSlicer, select the {printer_base['label']} printer + 0.4mm")
+    print(f"   nozzle, and pick '{process_name}' from the process preset dropdown")
+    if filament_name:
+        print(f"   and '{filament_name}' from the filament dropdown.")
+    print()
+    print("If a preset doesn't show up, it's a known ElegooSlicer quirk with")
+    print("user-preset loading (see GitHub issue OrcaSlicer/OrcaSlicer#10939) -")
+    print("as a fallback, open the report from print_advisor.py and enter the")
+    print("values by hand, then click Save in the slicer to create the preset")
+    print("yourself (that path always works).")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
