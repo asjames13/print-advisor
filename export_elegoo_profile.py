@@ -133,6 +133,10 @@ def slicer_overrides(geo, project, material_key):
     elif project in ('structural', 'structure'):
         process['layer_height'] = '0.2'
         process['initial_layer_print_height'] = '0.2'
+    elif project == 'lamp':
+        process['layer_height'] = '0.16'
+        process['initial_layer_print_height'] = '0.2'
+        process['spiral_mode'] = '1'
     else:
         process['layer_height'] = '0.2'
         process['initial_layer_print_height'] = '0.2'
@@ -167,6 +171,12 @@ def slicer_overrides(geo, project, material_key):
         process['bottom_shell_layers'] = '8'
         process['sparse_infill_density'] = '100%'
         process['sparse_infill_pattern'] = 'rectilinear'
+    elif project == 'lamp':
+        process['wall_loops'] = '1'
+        process['top_shell_layers'] = '0'
+        process['bottom_shell_layers'] = '3'
+        process['sparse_infill_density'] = '0%'
+        process['sparse_infill_pattern'] = 'grid'
     else:  # test
         process['wall_loops'] = '2'
         process['top_shell_layers'] = '3'
@@ -174,7 +184,7 @@ def slicer_overrides(geo, project, material_key):
         process['sparse_infill_density'] = '12%'
         process['sparse_infill_pattern'] = 'grid'
 
-    if MATERIALS[material_key].get('flexible'):
+    if MATERIALS[material_key].get('flexible') and project != 'lamp':
         process['wall_loops'] = str(max(int(process['wall_loops']), 3))
 
     # Speed
@@ -185,6 +195,7 @@ def slicer_overrides(geo, project, material_key):
         'decor': ('150-180mm/s', '220mm/s'),
         'structural': ('110mm/s', '150mm/s'),
         'structure': ('110mm/s', '150mm/s'),
+        'lamp': ('80-100mm/s', '80-100mm/s'),  # infill is 0%, value unused but key must exist
     }
     outer, infill = speed_by_project[project]
     process['outer_wall_speed'] = str(round(_midpoint(outer)))
@@ -192,7 +203,9 @@ def slicer_overrides(geo, project, material_key):
     process['initial_layer_speed'] = '35' if large_flat else '50'
 
     # Support
-    if geo['overhang_pct'] > 5:
+    if project == 'lamp':
+        process['enable_support'] = '0'  # spiral mode is incompatible with supports
+    elif geo['overhang_pct'] > 5:
         process['enable_support'] = '1'
         process['support_type'] = 'tree(auto)' if project in ('figure', 'structural', 'structure') else 'normal(auto)'
         process['support_threshold_angle'] = '45'
@@ -251,7 +264,7 @@ def build_info(base_id=""):
 def main():
     parser = argparse.ArgumentParser(description="Export Print Advisor settings as ElegooSlicer user presets")
     parser.add_argument('stl_file', help="Path to the STL file")
-    parser.add_argument('--project', choices=['decor', 'functional', 'figure', 'test', 'lamp'], required=True)
+    parser.add_argument('--project', choices=['decor', 'functional', 'figure', 'test', 'structure', 'lamp'], required=True)
     parser.add_argument('--material', choices=list(MATERIALS.keys()), default='pla')
     parser.add_argument('--printer', choices=['cc', 'cc2'], default='cc2',
                          help="Centauri Carbon (cc) or Centauri Carbon 2 (cc2, default)")
