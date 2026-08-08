@@ -44,6 +44,8 @@ that's the path you pass in.
 | `functional` | Gym brackets, pulleys, mechanical/load-bearing parts | Strength, wall count, load-direction orientation |
 | `figure` | Action figures, articulated joints, organic sculpts | Detail, joint/peg strength |
 | `test` | Quick calibration or throwaway test prints | Speed, minimal material use |
+| `structure` | Max-strength brackets, high-stress structural parts | 8 walls, 100% infill, slow speeds |
+| `lamp` | Lamp shades, light diffusers | Spiral/vase mode, hollow single-wall shell, even light diffusion |
 
 ## Materials (`--material`)
 
