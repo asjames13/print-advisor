@@ -274,6 +274,20 @@ def recommend_orientation(geo, project):
             )
         orientation = "Prioritize force-vector orientation over flatness."
 
+    elif project == 'lamp':
+        orientation = (
+            f"Place the {geo['best_face']} opening/base face down — stand the shade upright."
+        )
+        reasons.append(
+            "Light-diffusing shells print most evenly standing upright on their widest "
+            "stable opening — printing on a side introduces visible banding where layer "
+            "lines catch the light differently."
+        )
+        reasons.append(
+            "Spiral (vase) mode climbs bottom-to-top as one continuous outline — orient so "
+            "every horizontal slice is a single closed loop (solid base down, opening up)."
+        )
+
     else:  # test
         orientation = f"Quick/practical — place the {geo['best_face']} face down if it's reasonably flat, otherwise whatever orients fastest."
         reasons.append(
@@ -357,6 +371,19 @@ def recommend(geo, project, material_key):
             "Standard 0.2mm layer height combined with heavy shell walls and 100% infill "
             "maximizes interlayer bonding strength and load-bearing performance."
         )
+    elif project == 'lamp':
+        settings['quality']['Layer height'] = '0.16mm'
+        settings['quality']['First layer height'] = '0.2mm'
+        settings['quality']['Spiral (vase) mode'] = 'On'
+        settings['notes'].append(
+            "Thinner layer height (0.16mm) gives smoother, more even light diffusion "
+            "through the walls than the usual 0.2mm default."
+        )
+        settings['notes'].append(
+            "Spiral (vase) mode assumes a single open-top shell — one continuous outline "
+            "per layer, no separate islands, no closed top. If this shade has double walls "
+            "or bridging geometry, turn spiral mode off in-slicer and bump wall loops to 2."
+        )
     else:
         settings['quality']['Layer height'] = '0.2mm'
         settings['quality']['First layer height'] = '0.2mm'
@@ -365,6 +392,8 @@ def recommend(geo, project, material_key):
         'Aligned (rear/hidden edge)' if project in ('decor', 'functional', 'structural', 'structure')
         else 'Random (breaks up seam on organic surface)'
     )
+    if project == 'lamp':
+        settings['quality']['Seam position'] = 'N/A (spiral mode — continuous wall, no layer seam)'
     if project == 'decor':
         settings['quality']['Ironing type'] = 'Top surfaces only (for gloss-prep letters/panels)'
     else:
@@ -404,6 +433,17 @@ def recommend(geo, project, material_key):
             "Maximized wall loops (8), shell layers (8), and 100% solid infill "
             "to achieve maximum torsional and mechanical load strength."
         )
+    elif project == 'lamp':
+        settings['strength']['Wall loops'] = 1
+        settings['strength']['Top/bottom shell layers'] = '0 top / 3 bottom'
+        settings['strength']['Sparse infill density'] = '0%'
+        settings['strength']['Sparse infill pattern'] = 'N/A (hollow vase-mode shell)'
+        settings['notes'].append(
+            "Single wall, no infill, no top shells — spiral mode prints the shade as one "
+            "continuous hollow shell so light passes through evenly. The 3 bottom layers "
+            "give a solid base. If the design needs a solid mount for a bulb socket, add "
+            "a modifier/cut in-slicer for just that section rather than infilling the part."
+        )
     else:  # test
         settings['strength']['Wall loops'] = 2
         settings['strength']['Top/bottom shell layers'] = 3
@@ -411,7 +451,13 @@ def recommend(geo, project, material_key):
         settings['strength']['Sparse infill pattern'] = 'Grid (fast, default)'
 
     if mat.get('flexible'):
-        settings['strength']['Wall loops'] = max(settings['strength']['Wall loops'], 3)
+        if project == 'lamp':
+            settings['notes'].append(
+                "Flexible filament in vase mode keeps the single wall — a TPU shade prints "
+                "fine but stays floppy; skip the usual extra-wall bump."
+            )
+        else:
+            settings['strength']['Wall loops'] = max(settings['strength']['Wall loops'], 3)
 
     # --- Speed tab ---
     if project == 'test':
@@ -433,6 +479,13 @@ def recommend(geo, project, material_key):
             "Structural part — print speeds are slowed down to maximize layer "
             "adhesion, thermal fusion, and uniform solid infill extrusion."
         )
+    elif project == 'lamp':
+        settings['speed']['Outer wall'] = '80-100mm/s'
+        settings['speed']['Sparse infill'] = 'N/A (no infill)'
+        settings['notes'].append(
+            "Slower outer wall speed for lamp shells — consistent extrusion at lower speed "
+            "means more even wall thickness, which shows up directly as even light diffusion."
+        )
     else:  # decor
         settings['speed']['Outer wall'] = '150-180mm/s'
         settings['speed']['Sparse infill'] = '220mm/s'
@@ -442,7 +495,13 @@ def recommend(geo, project, material_key):
     else:
         settings['speed']['First layer speed'] = '50mm/s (default fine)'
 
-    if geo['overhang_pct'] > 5:
+    if project == 'lamp':
+        settings['support']['Enable support'] = False
+        settings['notes'].append(
+            "Spiral mode cannot print supports — overhangs steeper than ~45° will droop. "
+            "Gentle continuous flares are fine; check the profile curve before committing."
+        )
+    elif geo['overhang_pct'] > 5:
         settings['support']['Enable support'] = True
         settings['support']['Type'] = 'Tree (auto)' if project in ('figure', 'structural', 'structure') else 'Normal'
         settings['support']['Threshold angle'] = '45°'
@@ -527,7 +586,7 @@ def print_report(filename, geo, settings, mat, project):
 def main():
     parser = argparse.ArgumentParser(description="Elegoo Slicer settings advisor")
     parser.add_argument('stl_file', help="Path to the STL file")
-    parser.add_argument('--project', choices=['decor', 'functional', 'figure', 'test', 'structure'],
+    parser.add_argument('--project', choices=['decor', 'functional', 'figure', 'test', 'structure', 'lamp'],
                          required=True, help="Project type")
     parser.add_argument('--material', choices=list(MATERIALS.keys()),
                          default='pla', help="Filament material (default: pla)")
