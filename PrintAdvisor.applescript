@@ -28,7 +28,7 @@ on open theFiles
 end open
 
 on processFile(stlPath)
-	set projectChoice to choose from list {"functional", "decor", "figure", "test", "structure"} with prompt "What is this part for?" default items {"functional"} without multiple selections allowed
+	set projectChoice to choose from list {"functional", "decor", "figure", "test", "structure", "lamp"} with prompt "What is this part for?" default items {"functional"} without multiple selections allowed
 	if projectChoice is false then return
 	set projectType to item 1 of projectChoice
 
@@ -60,10 +60,7 @@ on processFile(stlPath)
 		try
 			set cmd to quoted form of pythonBin & " " & quoted form of (scriptDir & "/patch_elegoo_project.py") & " " & quoted form of baseProject & " " & quoted form of stlPath & " --project " & projectType & " --material " & materialType & " --out " & quoted form of outPath
 			do shell script cmd
-			tell application "Finder"
-				reveal (POSIX file outPath)
-				activate
-			end tell
+			do shell script "open " & quoted form of outPath
 			display notification "Ready-to-slice file created" with title "Print Advisor"
 		on error errMsg
 			display dialog "3MF generation failed:" & return & errMsg buttons {"OK"} default button "OK"
